@@ -6,44 +6,10 @@ struct SourcePickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Capture", selection: $viewModel.selection.mode) {
-                ForEach(CaptureMode.allCases) { mode in
-                    Label(mode.title, systemImage: mode.symbolName)
-                        .tag(mode)
+            sourceControls
+                .onChange(of: viewModel.selection.mode) { _, _ in
+                    viewModel.selectDefaultSourceIfNeeded()
                 }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Capture source type")
-            .onChange(of: viewModel.selection.mode) { _, _ in
-                viewModel.selectDefaultSourceIfNeeded()
-            }
-
-            HStack(spacing: 8) {
-                Picker("Source", selection: sourceIDBinding) {
-                    ForEach(sourceProvider.allSources(for: viewModel.selection.mode)) { source in
-                        Text(source.title)
-                            .tag(source.id)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-                .disabled(sourceProvider.allSources(for: viewModel.selection.mode).isEmpty)
-                .help("Choose the display, window, or application to record.")
-                .accessibilityLabel("Capture source")
-
-                Button {
-                    Task {
-                        await sourceProvider.refresh()
-                        viewModel.selectDefaultSourceIfNeeded()
-                        await viewModel.refreshPreview()
-                    }
-                } label: {
-                    Image(systemName: sourceProvider.isRefreshing ? "arrow.triangle.2.circlepath.circle" : "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh sources")
-                .accessibilityLabel("Refresh sources")
-            }
 
             if viewModel.selection.mode == .region {
                 RegionEditorView(viewModel: viewModel)
@@ -57,6 +23,71 @@ struct SourcePickerView: View {
         }
         .padding(12)
         .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var sourceControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                captureModePicker
+                    .frame(minWidth: 460, idealWidth: 520)
+
+                Spacer(minLength: 8)
+
+                sourcePicker
+                    .frame(minWidth: 180, idealWidth: 240, maxWidth: 280)
+
+                refreshButton
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                captureModePicker
+
+                HStack(spacing: 8) {
+                    sourcePicker
+                        .frame(maxWidth: .infinity)
+                    refreshButton
+                }
+            }
+        }
+    }
+
+    private var captureModePicker: some View {
+        Picker("Capture", selection: $viewModel.selection.mode) {
+            ForEach(CaptureMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.symbolName)
+                    .tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Capture source type")
+    }
+
+    private var sourcePicker: some View {
+        Picker("Source", selection: sourceIDBinding) {
+            ForEach(sourceProvider.allSources(for: viewModel.selection.mode)) { source in
+                Text(source.title)
+                    .tag(source.id)
+            }
+        }
+        .labelsHidden()
+        .disabled(sourceProvider.allSources(for: viewModel.selection.mode).isEmpty)
+        .help("Choose the display, window, or application to record.")
+        .accessibilityLabel("Capture source")
+    }
+
+    private var refreshButton: some View {
+        Button {
+            Task {
+                await sourceProvider.refresh()
+                viewModel.selectDefaultSourceIfNeeded()
+                await viewModel.refreshPreview()
+            }
+        } label: {
+            Image(systemName: sourceProvider.isRefreshing ? "arrow.triangle.2.circlepath.circle" : "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .help("Refresh sources")
+        .accessibilityLabel("Refresh sources")
     }
 
     private var sourceIDBinding: Binding<String> {
@@ -134,4 +165,3 @@ private struct NumberField: View {
         }
     }
 }
-
