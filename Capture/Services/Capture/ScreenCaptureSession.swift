@@ -34,7 +34,8 @@ final class ScreenCaptureSession: NSObject {
                 quality: configuration.quality,
                 container: configuration.outputContainer,
                 codec: configuration.codec,
-                audioMode: configuration.audioMode
+                audioMode: configuration.audioMode,
+                selectedMicrophoneID: configuration.selectedMicrophoneID
             )
         )
         try await mediaWriter.prepare()
