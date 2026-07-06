@@ -16,6 +16,7 @@ struct MediaWriterSettings {
     var container: OutputContainer
     var codec: VideoCodec
     var audioMode: AudioMode
+    var selectedMicrophoneID: String?
 }
 
 actor MediaWriter {
@@ -40,7 +41,10 @@ actor MediaWriter {
     }
 
     func prepare() throws {
-        let writer = try AVAssetWriter(outputURL: outputURL, fileType: settings.container.avFileType)
+        let writer = try AVAssetWriter(
+            outputURL: outputURL,
+            fileType: settings.container.avFileType(audioMode: settings.audioMode)
+        )
         writer.shouldOptimizeForNetworkUse = true
 
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoOutputSettings())
@@ -62,7 +66,7 @@ actor MediaWriter {
         }
 
         if settings.audioMode.capturesMicrophone {
-            let input = audioInput(channelCount: 2)
+            let input = audioInput(channelCount: microphoneChannelCount(deviceID: settings.selectedMicrophoneID))
             guard writer.canAdd(input) else {
                 throw RecorderFailure.writerFailed("Microphone audio cannot be added to this recording.")
             }
@@ -158,7 +162,7 @@ actor MediaWriter {
         }
 
         if writer.status == .failed {
-            throw RecorderFailure.writerFailed(writer.error?.localizedDescription ?? "The recording could not be finalised.")
+            throw RecorderFailure.writerFailed(writerErrorDescription(fallback: "The recording could not be finalised."))
         }
 
         return max(0, CMTimeGetSeconds(lastPresentationTime))
@@ -175,7 +179,7 @@ actor MediaWriter {
 
         firstPresentationTime = presentationTime
         guard writer.startWriting() else {
-            throw RecorderFailure.writerFailed(writer.error?.localizedDescription ?? "The media writer could not start.")
+            throw RecorderFailure.writerFailed(writerErrorDescription(fallback: "The media writer could not start."))
         }
         writer.startSession(atSourceTime: .zero)
         hasStartedSession = true
@@ -188,7 +192,7 @@ actor MediaWriter {
 
         if input.isReadyForMoreMediaData {
             if !input.append(sampleBuffer) {
-                throw RecorderFailure.writerFailed(writer?.error?.localizedDescription ?? failureMessage)
+                throw RecorderFailure.writerFailed(writerErrorDescription(fallback: failureMessage))
             }
         }
     }
@@ -264,12 +268,53 @@ actor MediaWriter {
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 48_000,
             AVNumberOfChannelsKey: channelCount,
-            AVEncoderBitRateKey: 192_000
+            AVEncoderBitRateKey: channelCount == 1 ? 96_000 : 192_000
         ]
 
         let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
         input.expectsMediaDataInRealTime = true
         return input
+    }
+
+    private func microphoneChannelCount(deviceID: String?) -> Int {
+        let devices = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
+
+        let device: AVCaptureDevice?
+        if let deviceID, let selectedDevice = devices.first(where: { $0.uniqueID == deviceID }) {
+            device = selectedDevice
+        } else {
+            device = AVCaptureDevice.default(for: .audio) ?? devices.first
+        }
+
+        guard let formatDescription = device?.activeFormat.formatDescription,
+              let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            return 1
+        }
+
+        let channelCount = Int(streamDescription.pointee.mChannelsPerFrame)
+        return min(max(channelCount, 1), 2)
+    }
+
+    private func writerErrorDescription(fallback: String) -> String {
+        guard let error = writer?.error as NSError? else {
+            return fallback
+        }
+
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericMessages = [
+            "The operation could not be completed",
+            "The operation couldn’t be completed."
+        ]
+
+        guard !genericMessages.contains(message) else {
+            return "\(fallback) AVFoundation reported \(error.domain) \(error.code)."
+        }
+
+        return message.isEmpty ? fallback : message
     }
 }
 
@@ -280,9 +325,12 @@ private extension CMTime {
 }
 
 private extension OutputContainer {
-    var avFileType: AVFileType {
+    func avFileType(audioMode: AudioMode) -> AVFileType {
         switch self {
-        case .mp4: return .mp4
+        case .mp4:
+            // AVAssetWriter rejects AAC audio inputs for public.mpeg-4 on this stack.
+            // The m4v writer variant keeps the file MPEG-4 based and accepts video + AAC audio.
+            return audioMode == .none ? .mp4 : .m4v
         case .mov: return .mov
         }
     }
