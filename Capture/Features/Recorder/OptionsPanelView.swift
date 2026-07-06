@@ -72,9 +72,11 @@ struct OptionsPanelView: View {
                         .help("Draw a click highlight around the pointer.")
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
             Label("Mouse", systemImage: "cursorarrow.click")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var qualitySection: some View {
@@ -172,6 +174,7 @@ struct OptionsPanelView: View {
                 .frame(width: settingsLabelWidth, alignment: .leading)
             content()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
