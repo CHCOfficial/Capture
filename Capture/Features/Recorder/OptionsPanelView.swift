@@ -62,10 +62,15 @@ struct OptionsPanelView: View {
     private var mouseSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Show cursor", isOn: $viewModel.configuration.mouse.showsCursor)
-                    .help("Include the pointer in recordings.")
-                Toggle("Show clicks", isOn: $viewModel.configuration.mouse.showsClicks)
-                    .help("Draw a click highlight around the pointer.")
+                settingsRow("Cursor") {
+                    Toggle("Show", isOn: $viewModel.configuration.mouse.showsCursor)
+                        .help("Include the pointer in recordings.")
+                }
+
+                settingsRow("Clicks") {
+                    Toggle("Show", isOn: $viewModel.configuration.mouse.showsClicks)
+                        .help("Draw a click highlight around the pointer.")
+                }
             }
         } label: {
             Label("Mouse", systemImage: "cursorarrow.click")
