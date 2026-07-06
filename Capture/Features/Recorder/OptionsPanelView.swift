@@ -3,6 +3,7 @@ import SwiftUI
 struct OptionsPanelView: View {
     @ObservedObject var viewModel: RecorderViewModel
     @ObservedObject private var microphoneLevelMeter: MicrophoneLevelMeter
+    private let settingsLabelWidth: CGFloat = 82
 
     init(viewModel: RecorderViewModel) {
         self.viewModel = viewModel
@@ -21,24 +22,36 @@ struct OptionsPanelView: View {
     private var audioSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Audio", selection: $viewModel.configuration.audioMode) {
-                    ForEach(AudioMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                settingsRow("Audio") {
+                    Picker("Audio", selection: $viewModel.configuration.audioMode) {
+                        ForEach(AudioMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if viewModel.configuration.audioMode.capturesMicrophone {
-                    Picker("Input", selection: microphoneBinding) {
-                        Text("System Default").tag("")
-                        ForEach(viewModel.microphones) { microphone in
-                            Text(microphone.name).tag(microphone.id)
+                    settingsRow("Input") {
+                        Picker("Input", selection: microphoneBinding) {
+                            Text("System Default").tag("")
+                            ForEach(viewModel.microphones) { microphone in
+                                Text(microphone.name).tag(microphone.id)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help("Choose the microphone to record.")
                     }
-                    .help("Choose the microphone to record.")
 
-                    MicrophoneMeterView(level: microphoneLevelMeter.level)
-                        .frame(height: 8)
-                        .accessibilityLabel("Microphone level")
+                    HStack(spacing: 8) {
+                        Color.clear
+                            .frame(width: settingsLabelWidth, height: 0)
+                        MicrophoneMeterView(level: microphoneLevelMeter.level)
+                            .frame(height: 8)
+                            .accessibilityLabel("Microphone level")
+                    }
                 }
             }
         } label: {
@@ -143,6 +156,17 @@ struct OptionsPanelView: View {
             get: { viewModel.configuration.selectedMicrophoneID ?? "" },
             set: { viewModel.configuration.selectedMicrophoneID = $0.isEmpty ? nil : $0 }
         )
+    }
+
+    private func settingsRow<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(width: settingsLabelWidth, alignment: .leading)
+            content()
+        }
     }
 }
 
