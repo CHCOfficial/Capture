@@ -2,7 +2,8 @@
 
 Capture is a native macOS screen recorder built with SwiftUI, AppKit where needed, ScreenCaptureKit, AVFoundation, and AVAssetWriter.
 
-<img width="2024" height="1664" alt="SCR-20260706-eacx" src="https://github.com/user-attachments/assets/87113b21-7edf-46b1-b2db-a0a013c131c3" />
+<img width="1222" height="895" alt="image" src="https://github.com/user-attachments/assets/848ed72c-d8af-413b-8c74-8da654114459" />
+
 
 
 ## Requirements
