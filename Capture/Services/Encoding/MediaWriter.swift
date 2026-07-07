@@ -3,7 +3,7 @@ import CoreGraphics
 import CoreMedia
 import Foundation
 
-enum CapturedSampleKind {
+enum CapturedSampleKind: Hashable {
     case screen
     case systemAudio
     case microphoneAudio
@@ -30,10 +30,10 @@ actor MediaWriter {
 
     private var hasStartedSession = false
     private var firstPresentationTime: CMTime?
-    private var accumulatedPauseDuration = CMTime.zero
-    private var pauseBeganAtPresentationTime: CMTime?
+    private var accumulatedPauseDurations: [CapturedSampleKind: CMTime] = [:]
+    private var pauseBeganAtPresentationTimes: [CapturedSampleKind: CMTime] = [:]
+    private var lastPresentationTimes: [CapturedSampleKind: CMTime] = [:]
     private var isPaused = false
-    private var lastPresentationTime = CMTime.zero
 
     init(outputURL: URL, settings: MediaWriterSettings) {
         self.outputURL = outputURL
@@ -87,18 +87,19 @@ actor MediaWriter {
         }
 
         if isPaused {
-            if pauseBeganAtPresentationTime == nil {
-                pauseBeganAtPresentationTime = presentationTime
+            if pauseBeganAtPresentationTimes[kind] == nil {
+                pauseBeganAtPresentationTimes[kind] = presentationTime
             }
             return
         }
 
-        if let pauseBeganAtPresentationTime {
+        if let pauseBeganAtPresentationTime = pauseBeganAtPresentationTimes[kind] {
             let pauseDuration = CMTimeSubtract(presentationTime, pauseBeganAtPresentationTime)
             if pauseDuration.seconds.isFinite, pauseDuration > .zero {
-                accumulatedPauseDuration = CMTimeAdd(accumulatedPauseDuration, pauseDuration)
+                let previousDuration = accumulatedPauseDurations[kind] ?? .zero
+                accumulatedPauseDurations[kind] = CMTimeAdd(previousDuration, pauseDuration)
             }
-            self.pauseBeganAtPresentationTime = nil
+            pauseBeganAtPresentationTimes[kind] = nil
         }
 
         if !hasStartedSession {
@@ -112,16 +113,20 @@ actor MediaWriter {
             return
         }
 
-        let offset = CMTimeAdd(firstPresentationTime, accumulatedPauseDuration)
-        let retimedBuffer = try retimedSampleBuffer(sampleBuffer, subtracting: offset)
+        let pauseDuration = accumulatedPauseDurations[kind] ?? .zero
+        let offset = CMTimeAdd(firstPresentationTime, pauseDuration)
         let adjustedPresentationTime = CMTimeSubtract(presentationTime, offset)
-        if adjustedPresentationTime > lastPresentationTime {
-            lastPresentationTime = adjustedPresentationTime
-        }
 
         guard adjustedPresentationTime >= .zero else {
             return
         }
+
+        if let lastPresentationTime = lastPresentationTimes[kind],
+           adjustedPresentationTime <= lastPresentationTime {
+            return
+        }
+
+        let retimedBuffer = try retimedSampleBuffer(sampleBuffer, subtracting: offset)
 
         switch kind {
         case .screen:
@@ -131,6 +136,8 @@ actor MediaWriter {
         case .microphoneAudio:
             try append(retimedBuffer, to: microphoneAudioInput, failureMessage: "Microphone encoder could not accept audio.")
         }
+
+        lastPresentationTimes[kind] = adjustedPresentationTime
     }
 
     func pause() {
@@ -165,7 +172,8 @@ actor MediaWriter {
             throw RecorderFailure.writerFailed(writerErrorDescription(fallback: "The recording could not be finalised."))
         }
 
-        return max(0, CMTimeGetSeconds(lastPresentationTime))
+        let duration = lastPresentationTimes.values.max() ?? .zero
+        return max(0, CMTimeGetSeconds(duration))
     }
 
     func cancel() {
