@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct LivePreviewView: View {
@@ -9,11 +10,9 @@ struct LivePreviewView: View {
                 .fill(Color.black.opacity(0.88))
 
             if let image = previewController.image {
-                Image(image, scale: 1, orientation: .up, label: Text("Live preview"))
-                    .resizable()
-                    .interpolation(.medium)
-                    .scaledToFit()
+                PreviewImageLayerView(image: image)
                     .padding(8)
+                    .accessibilityLabel("Live preview")
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -39,5 +38,63 @@ struct LivePreviewView: View {
         .transaction { transaction in
             transaction.animation = nil
         }
+    }
+}
+
+private struct PreviewImageLayerView: NSViewRepresentable {
+    let image: CGImage
+
+    func makeNSView(context: Context) -> LayerBackedPreviewView {
+        LayerBackedPreviewView()
+    }
+
+    func updateNSView(_ nsView: LayerBackedPreviewView, context: Context) {
+        nsView.image = image
+    }
+}
+
+final class LayerBackedPreviewView: NSView {
+    var image: CGImage? {
+        didSet {
+            updateLayerContents()
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureLayer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayer()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateLayerContents()
+    }
+
+    private func configureLayer() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.contentsGravity = .resizeAspect
+        layer?.minificationFilter = .linear
+        layer?.magnificationFilter = .linear
+        layer?.drawsAsynchronously = true
+        updateLayerContents()
+    }
+
+    private func updateLayerContents() {
+        guard let layer else {
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.contents = image
+        layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        CATransaction.commit()
     }
 }
