@@ -1,18 +1,19 @@
-import AppKit
 import CoreImage
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
 private let previewCIContext = CIContext(options: [.cacheIntermediates: false])
+private let previewColorSpace = CGColorSpaceCreateDeviceRGB()
+private let previewFrameIntervalNanoseconds: UInt64 = 33_000_000
 
 @MainActor
 final class PreviewCaptureController: NSObject, ObservableObject {
-    @Published private(set) var image: NSImage?
+    @Published private(set) var image: CGImage?
     @Published private(set) var stateText = "Choose a source"
     @Published private(set) var isRunning = false
 
-    private let sampleQueue = DispatchQueue(label: "com.capture.preview-samples", qos: .utility)
+    private let sampleQueue = DispatchQueue(label: "com.capture.preview-samples", qos: .userInitiated)
     private var stream: SCStream?
     private nonisolated(unsafe) var lastPublishedFrameTime = DispatchTime.now()
 
@@ -32,6 +33,7 @@ final class PreviewCaptureController: NSObject, ObservableObject {
             let stream = SCStream(filter: filter, configuration: streamConfiguration, delegate: self)
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
             self.stream = stream
+            lastPublishedFrameTime = DispatchTime(uptimeNanoseconds: 0)
             try await stream.startCapture()
             isRunning = true
             stateText = ""
@@ -70,8 +72,8 @@ final class PreviewCaptureController: NSObject, ObservableObject {
         let size = previewSize(for: target, filter: filter)
         configuration.width = size.width
         configuration.height = size.height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
-        configuration.queueDepth = 3
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        configuration.queueDepth = 5
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.scalesToFit = true
         configuration.preservesAspectRatio = true
@@ -94,8 +96,8 @@ final class PreviewCaptureController: NSObject, ObservableObject {
         }
 
         let longEdge = max(size.width, size.height)
-        if longEdge > 1200 {
-            let multiplier = 1200 / longEdge
+        if longEdge > 1440 {
+            let multiplier = 1440 / longEdge
             size = CGSize(width: size.width * multiplier, height: size.height * multiplier)
         }
 
@@ -118,20 +120,20 @@ extension PreviewCaptureController: SCStreamOutput {
         }
 
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
-        guard let cgImage = previewCIContext.createCGImage(ciImage, from: ciImage.extent) else {
+        guard let cgImage = previewCIContext.createCGImage(
+            ciImage,
+            from: ciImage.extent,
+            format: .BGRA8,
+            colorSpace: previewColorSpace
+        ) else {
             return
         }
-
-        let nsImage = NSImage(
-            cgImage: cgImage,
-            size: NSSize(width: cgImage.width, height: cgImage.height)
-        )
 
         Task { @MainActor in
             guard self.stream === stream else {
                 return
             }
-            self.image = nsImage
+            self.image = cgImage
         }
     }
 
@@ -149,7 +151,7 @@ extension PreviewCaptureController: SCStreamOutput {
     private nonisolated func shouldPublishFrame() -> Bool {
         let now = DispatchTime.now()
         let elapsed = now.uptimeNanoseconds - lastPublishedFrameTime.uptimeNanoseconds
-        guard elapsed >= 80_000_000 else {
+        guard elapsed >= previewFrameIntervalNanoseconds else {
             return false
         }
 
