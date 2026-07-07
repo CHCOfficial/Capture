@@ -9,12 +9,11 @@ struct LivePreviewView: View {
                 .fill(Color.black.opacity(0.88))
 
             if let image = previewController.image {
-                Image(nsImage: image)
+                Image(image, scale: 1, orientation: .up, label: Text("Live preview"))
                     .resizable()
                     .interpolation(.medium)
                     .scaledToFit()
                     .padding(8)
-                    .accessibilityLabel("Live preview")
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -36,6 +35,9 @@ struct LivePreviewView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(.white.opacity(0.12))
+        }
+        .transaction { transaction in
+            transaction.animation = nil
         }
     }
 }
