@@ -2,7 +2,11 @@
 
 Capture is a native macOS screen recorder built with SwiftUI, AppKit where needed, ScreenCaptureKit, AVFoundation, and AVAssetWriter.
 
+You can use your iPhone as a dedicated microphone.
+
 <img width="1355" height="1055" alt="image" src="https://github.com/user-attachments/assets/aafacc2b-def2-4fc8-86a2-52d8768ac54a" />
+
+<img width="601" height="1306" alt="1EAF8D8B-5209-45A3-9E7C-53FAD1AC2B24_1_105_c" src="https://github.com/user-attachments/assets/5b465a39-923d-465d-9e75-24f9d35a2fc3" />
 
 
 ## Requirements
