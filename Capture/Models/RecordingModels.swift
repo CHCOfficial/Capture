@@ -157,7 +157,7 @@ struct MouseCaptureOptions: Equatable, Codable {
 struct RecordingConfiguration: Equatable, Codable {
     var frameRate: FrameRate = .thirty
     var quality: RecordingQuality = .balanced
-    var resolution: ResolutionChoice = .native
+    var resolution: ResolutionChoice = .p1080
     var audioMode: AudioMode = .none
     var selectedMicrophoneID: String?
     var mouse: MouseCaptureOptions = MouseCaptureOptions()
@@ -165,8 +165,25 @@ struct RecordingConfiguration: Equatable, Codable {
     var hidesMainWindowDuringCapture: Bool = true
     var showsStatusItem: Bool = true
     var outputContainer: OutputContainer = .mp4
-    var codec: VideoCodec = .hevc
+    var codec: VideoCodec = .h264
     var includeCaptureAppInDisplayRecordings: Bool = false
+}
+
+extension RecordingConfiguration {
+    var effectiveFrameRate: FrameRate {
+        frameRate
+    }
+
+    var maximumReliableLongEdge: CGFloat? {
+        let userMaximumLongEdge = resolution.maximumLongEdge
+        let reliabilityMaximumLongEdge: CGFloat = frameRate == .sixty ? 1280 : 1920
+
+        guard let userMaximumLongEdge else {
+            return reliabilityMaximumLongEdge
+        }
+
+        return min(userMaximumLongEdge, reliabilityMaximumLongEdge)
+    }
 }
 
 enum CaptureSourceKind: String, Codable {
