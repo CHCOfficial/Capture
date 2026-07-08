@@ -16,6 +16,8 @@ final class PreviewCaptureController: NSObject, ObservableObject {
     private let sampleQueue = DispatchQueue(label: "com.capture.preview-samples", qos: .userInitiated)
     private var stream: SCStream?
     private nonisolated(unsafe) var lastPublishedFrameTime = DispatchTime.now()
+    private let frameStateLock = NSLock()
+    private nonisolated(unsafe) var hasFrameAwaitingMainActor = false
 
     func start(target: ResolvedCaptureTarget, configuration: RecordingConfiguration) async {
         guard SystemCompatibility.isSupported else {
@@ -96,8 +98,8 @@ final class PreviewCaptureController: NSObject, ObservableObject {
         }
 
         let longEdge = max(size.width, size.height)
-        if longEdge > 1440 {
-            let multiplier = 1440 / longEdge
+        if longEdge > 1080 {
+            let multiplier = 1080 / longEdge
             size = CGSize(width: size.width * multiplier, height: size.height * multiplier)
         }
 
@@ -115,7 +117,8 @@ extension PreviewCaptureController: SCStreamOutput {
         guard type == .screen,
               isCompleteFrame(sampleBuffer),
               shouldPublishFrame(),
-              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              reserveFrameSlot() else {
             return
         }
 
@@ -126,10 +129,15 @@ extension PreviewCaptureController: SCStreamOutput {
             format: .BGRA8,
             colorSpace: previewColorSpace
         ) else {
+            releaseFrameSlot()
             return
         }
 
         Task { @MainActor in
+            defer {
+                self.releaseFrameSlot()
+            }
+
             guard self.stream === stream else {
                 return
             }
@@ -157,6 +165,26 @@ extension PreviewCaptureController: SCStreamOutput {
 
         lastPublishedFrameTime = now
         return true
+    }
+
+    private nonisolated func reserveFrameSlot() -> Bool {
+        frameStateLock.lock()
+        defer {
+            frameStateLock.unlock()
+        }
+
+        guard !hasFrameAwaitingMainActor else {
+            return false
+        }
+
+        hasFrameAwaitingMainActor = true
+        return true
+    }
+
+    private nonisolated func releaseFrameSlot() {
+        frameStateLock.lock()
+        hasFrameAwaitingMainActor = false
+        frameStateLock.unlock()
     }
 }
 
