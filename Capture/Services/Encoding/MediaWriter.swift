@@ -130,11 +130,17 @@ actor MediaWriter {
 
         switch kind {
         case .screen:
-            try append(retimedBuffer, to: videoInput, failureMessage: "Video encoder could not accept a frame.")
+            guard try append(retimedBuffer, to: videoInput, failureMessage: "Video encoder could not accept a frame.") else {
+                return
+            }
         case .systemAudio:
-            try append(retimedBuffer, to: systemAudioInput, failureMessage: "System audio encoder could not accept audio.")
+            guard try append(retimedBuffer, to: systemAudioInput, failureMessage: "System audio encoder could not accept audio.") else {
+                return
+            }
         case .microphoneAudio:
-            try append(retimedBuffer, to: microphoneAudioInput, failureMessage: "Microphone encoder could not accept audio.")
+            guard try append(retimedBuffer, to: microphoneAudioInput, failureMessage: "Microphone encoder could not accept audio.") else {
+                return
+            }
         }
 
         lastPresentationTimes[kind] = adjustedPresentationTime
@@ -193,16 +199,25 @@ actor MediaWriter {
         hasStartedSession = true
     }
 
-    private func append(_ sampleBuffer: CMSampleBuffer, to input: AVAssetWriterInput?, failureMessage: String) throws {
+    private func append(_ sampleBuffer: CMSampleBuffer, to input: AVAssetWriterInput?, failureMessage: String) throws -> Bool {
         guard let input else {
-            return
+            return false
         }
 
-        if input.isReadyForMoreMediaData {
-            if !input.append(sampleBuffer) {
+        try ensureWriterCanAcceptSamples(failureMessage: failureMessage)
+
+        guard input.isReadyForMoreMediaData else {
+            return false
+        }
+
+        if !input.append(sampleBuffer) {
+            if writer?.status == .failed {
                 throw RecorderFailure.writerFailed(writerErrorDescription(fallback: failureMessage))
             }
+            return false
         }
+
+        return true
     }
 
     private func retimedSampleBuffer(_ sampleBuffer: CMSampleBuffer, subtracting offset: CMTime) throws -> CMSampleBuffer {
@@ -249,10 +264,30 @@ actor MediaWriter {
         return copiedBuffer
     }
 
+    private func ensureWriterCanAcceptSamples(failureMessage: String) throws {
+        guard let writer else {
+            throw RecorderFailure.writerFailed("The media writer was not prepared.")
+        }
+
+        switch writer.status {
+        case .failed:
+            throw RecorderFailure.writerFailed(writerErrorDescription(fallback: failureMessage))
+        case .cancelled:
+            throw RecorderFailure.cancelled
+        case .completed:
+            throw RecorderFailure.writerFailed("The media writer has already finished this recording.")
+        case .unknown, .writing:
+            return
+        @unknown default:
+            return
+        }
+    }
+
     private func videoOutputSettings() -> [String: Any] {
         let width = Int(settings.videoSize.width.rounded(.toNearestOrAwayFromZero))
         let height = Int(settings.videoSize.height.rounded(.toNearestOrAwayFromZero))
-        let bitRate = Int(Double(width * height * settings.frameRate.rawValue) * 0.07 * settings.quality.videoBitRateMultiplier)
+        let frameRate = settings.frameRate.rawValue
+        let bitRate = Int(Double(width * height * frameRate) * 0.055 * settings.quality.videoBitRateMultiplier)
 
         return [
             AVVideoCodecKey: settings.codec.avVideoCodecType,
@@ -260,8 +295,9 @@ actor MediaWriter {
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: max(bitRate, 2_000_000),
-                AVVideoExpectedSourceFrameRateKey: settings.frameRate.rawValue,
-                AVVideoMaxKeyFrameIntervalKey: settings.frameRate.rawValue * 2
+                AVVideoExpectedSourceFrameRateKey: frameRate,
+                AVVideoMaxKeyFrameIntervalKey: frameRate * 2,
+                AVVideoAllowFrameReorderingKey: false
             ],
             AVVideoColorPropertiesKey: [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
@@ -318,11 +354,19 @@ actor MediaWriter {
             "The operation couldn’t be completed."
         ]
 
-        guard !genericMessages.contains(message) else {
-            return "\(fallback) AVFoundation reported \(error.domain) \(error.code)."
+        if !message.isEmpty, !genericMessages.contains(message) {
+            return message
         }
 
-        return message.isEmpty ? fallback : message
+        return "\(fallback) AVFoundation reported \(error.domain) \(error.code)\(underlyingErrorSummary(from: error))."
+    }
+
+    private func underlyingErrorSummary(from error: NSError) -> String {
+        guard let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? NSError else {
+            return ""
+        }
+
+        return " with underlying \(underlyingError.domain) \(underlyingError.code)"
     }
 }
 
