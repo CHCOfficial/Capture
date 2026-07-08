@@ -55,6 +55,7 @@ final class RecorderViewModel: ObservableObject {
     private var recordingStartedAt: Date?
     private var accumulatedPausedTime: TimeInterval = 0
     private var pauseBeganAt: Date?
+    private var hasHandledCurrentFailure = false
 
     init(
         permissionService: PermissionAuthorizing = SystemPermissionService(),
@@ -376,6 +377,8 @@ final class RecorderViewModel: ObservableObject {
     }
 
     private func startRecordingFlow() async {
+        hasHandledCurrentFailure = false
+
         defer {
             recordingTask = nil
         }
@@ -537,6 +540,11 @@ final class RecorderViewModel: ObservableObject {
     }
 
     private func fail(_ failure: RecorderFailure) {
+        guard !hasHandledCurrentFailure else {
+            return
+        }
+
+        hasHandledCurrentFailure = true
         recordingTask?.cancel()
         elapsedTask?.cancel()
         captureSession?.cancel()
@@ -548,7 +556,10 @@ final class RecorderViewModel: ObservableObject {
         onShowMainWindow?()
         transition(to: .failed(failure))
         alertMessage = failure.localizedDescription
-        Task { await refreshPreview() }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await self?.refreshPreview()
+        }
     }
 
     private func validateSystemSupport() throws {
