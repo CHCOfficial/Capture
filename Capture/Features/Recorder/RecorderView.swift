@@ -20,7 +20,7 @@ struct RecorderView: View {
                     VStack(spacing: 12) {
                         SourcePickerView(viewModel: viewModel, sourceProvider: viewModel.sourceProvider)
                         LivePreviewView(previewController: viewModel.previewController)
-                            .frame(minHeight: 280)
+                            .frame(maxWidth: .infinity, alignment: .center)
                         RecordingControlsView(viewModel: viewModel)
                     }
 
