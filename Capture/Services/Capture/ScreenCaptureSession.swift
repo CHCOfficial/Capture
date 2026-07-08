@@ -10,6 +10,13 @@ final class ScreenCaptureSession: NSObject {
     private var writer: MediaWriter?
     private var outputURL: URL?
     private var isStopping = false
+    private let writerBacklogLock = NSLock()
+    private var pendingWriterSamples: [CapturedSampleKind: Int] = [:]
+    private let writerBacklogLimits: [CapturedSampleKind: Int] = [
+        .screen: 2,
+        .systemAudio: 12,
+        .microphoneAudio: 12
+    ]
 
     var onFailure: ((RecorderFailure) -> Void)?
     var onSourceBecameUnavailable: (() -> Void)?
@@ -21,6 +28,7 @@ final class ScreenCaptureSession: NSObject {
 
         self.outputURL = outputURL
         isStopping = false
+        resetWriterBacklog()
 
         let filter = makeFilter(for: target)
         let streamConfiguration = makeStreamConfiguration(for: target, filter: filter, recordingConfiguration: configuration)
@@ -77,6 +85,7 @@ final class ScreenCaptureSession: NSObject {
             writer = nil
             outputURL = nil
             isStopping = false
+            resetWriterBacklog()
         }
         return try await writer?.finish() ?? 0
     }
@@ -90,6 +99,7 @@ final class ScreenCaptureSession: NSObject {
             writer = nil
             outputURL = nil
             isStopping = false
+            resetWriterBacklog()
         }
     }
 
@@ -115,7 +125,7 @@ final class ScreenCaptureSession: NSObject {
         configuration.width = outputSize.width
         configuration.height = outputSize.height
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(recordingConfiguration.frameRate.rawValue))
-        configuration.queueDepth = 8
+        configuration.queueDepth = 5
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.scalesToFit = true
         configuration.preservesAspectRatio = true
@@ -160,6 +170,35 @@ final class ScreenCaptureSession: NSObject {
         return (width: Self.evenDimension(size.width), height: Self.evenDimension(size.height))
     }
 
+    private func reserveWriterSlot(for kind: CapturedSampleKind) -> Bool {
+        writerBacklogLock.lock()
+        defer {
+            writerBacklogLock.unlock()
+        }
+
+        let limit = writerBacklogLimits[kind] ?? 4
+        let pending = pendingWriterSamples[kind] ?? 0
+        guard pending < limit else {
+            return false
+        }
+
+        pendingWriterSamples[kind] = pending + 1
+        return true
+    }
+
+    private func releaseWriterSlot(for kind: CapturedSampleKind) {
+        writerBacklogLock.lock()
+        let pending = pendingWriterSamples[kind] ?? 0
+        pendingWriterSamples[kind] = max(0, pending - 1)
+        writerBacklogLock.unlock()
+    }
+
+    private func resetWriterBacklog() {
+        writerBacklogLock.lock()
+        pendingWriterSamples.removeAll(keepingCapacity: true)
+        writerBacklogLock.unlock()
+    }
+
     private static func evenDimension(_ value: CGFloat) -> Int {
         let rounded = max(2, Int(value.rounded(.toNearestOrAwayFromZero)))
         return rounded.isMultiple(of: 2) ? rounded : rounded + 1
@@ -184,7 +223,15 @@ extension ScreenCaptureSession: SCStreamOutput {
             return
         }
 
-        Task {
+        guard reserveWriterSlot(for: kind) else {
+            return
+        }
+
+        Task(priority: kind == .screen ? .userInitiated : .utility) {
+            defer {
+                releaseWriterSlot(for: kind)
+            }
+
             do {
                 try await writer?.append(sampleBuffer, kind: kind)
             } catch let failure as RecorderFailure {
