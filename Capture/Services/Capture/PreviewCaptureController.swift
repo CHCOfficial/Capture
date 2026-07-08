@@ -6,6 +6,7 @@ import ScreenCaptureKit
 private let previewCIContext = CIContext(options: [.cacheIntermediates: false])
 private let previewColorSpace = CGColorSpaceCreateDeviceRGB()
 private let previewFrameIntervalNanoseconds: UInt64 = 33_000_000
+private let previewCaptureMaximumLongEdge: CGFloat = 720
 
 @MainActor
 final class PreviewCaptureController: NSObject, ObservableObject {
@@ -98,8 +99,8 @@ final class PreviewCaptureController: NSObject, ObservableObject {
         }
 
         let longEdge = max(size.width, size.height)
-        if longEdge > 1080 {
-            let multiplier = 1080 / longEdge
+        if longEdge > previewCaptureMaximumLongEdge {
+            let multiplier = previewCaptureMaximumLongEdge / longEdge
             size = CGSize(width: size.width * multiplier, height: size.height * multiplier)
         }
 
