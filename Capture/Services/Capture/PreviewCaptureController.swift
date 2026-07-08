@@ -16,6 +16,7 @@ final class PreviewCaptureController: NSObject, ObservableObject {
 
     private let sampleQueue = DispatchQueue(label: "com.capture.preview-samples", qos: .userInitiated)
     private var stream: SCStream?
+    private var lifecycleToken = UUID()
     private nonisolated(unsafe) var lastPublishedFrameTime = DispatchTime.now()
     private let frameStateLock = NSLock()
     private nonisolated(unsafe) var hasFrameAwaitingMainActor = false
@@ -27,7 +28,13 @@ final class PreviewCaptureController: NSObject, ObservableObject {
             return
         }
 
-        await stop()
+        let token = UUID()
+        lifecycleToken = token
+        await stopCurrentStream()
+        guard lifecycleToken == token else {
+            return
+        }
+
         stateText = "Loading preview..."
 
         do {
@@ -35,12 +42,23 @@ final class PreviewCaptureController: NSObject, ObservableObject {
             let streamConfiguration = makeConfiguration(for: target, filter: filter, recordingConfiguration: configuration)
             let stream = SCStream(filter: filter, configuration: streamConfiguration, delegate: self)
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
+            guard lifecycleToken == token else {
+                try? await stream.stopCapture()
+                return
+            }
             self.stream = stream
             lastPublishedFrameTime = DispatchTime(uptimeNanoseconds: 0)
             try await stream.startCapture()
+            guard lifecycleToken == token else {
+                try? await stream.stopCapture()
+                return
+            }
             isRunning = true
             stateText = ""
         } catch {
+            guard lifecycleToken == token else {
+                return
+            }
             image = nil
             isRunning = false
             stateText = error.localizedDescription
@@ -48,10 +66,19 @@ final class PreviewCaptureController: NSObject, ObservableObject {
     }
 
     func stop() async {
-        if let stream {
-            try? await stream.stopCapture()
-        }
+        lifecycleToken = UUID()
+        await stopCurrentStream()
+    }
+
+    private func stopCurrentStream() async {
+        let currentStream = stream
         stream = nil
+        if let currentStream {
+            try? await currentStream.stopCapture()
+        }
+        if currentStream != nil {
+            releaseFrameSlot()
+        }
         isRunning = false
     }
 
@@ -192,6 +219,9 @@ extension PreviewCaptureController: SCStreamOutput {
 extension PreviewCaptureController: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         Task { @MainActor in
+            guard self.stream === stream else {
+                return
+            }
             self.image = nil
             self.stateText = error.localizedDescription
             self.isRunning = false
