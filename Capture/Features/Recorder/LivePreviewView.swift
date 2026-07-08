@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LivePreviewView: View {
     @ObservedObject var previewController: PreviewCaptureController
+    private let maximumPreviewSize = CGSize(width: 640, height: 400)
 
     var body: some View {
         ZStack {
@@ -30,6 +31,7 @@ struct LivePreviewView: View {
                 .accessibilityElement(children: .combine)
             }
         }
+        .frame(width: lockedPreviewSize.width, height: lockedPreviewSize.height)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -38,6 +40,28 @@ struct LivePreviewView: View {
         .transaction { transaction in
             transaction.animation = nil
         }
+    }
+
+    private var lockedPreviewSize: CGSize {
+        let aspectRatio: CGFloat
+        if let image = previewController.image, image.height > 0 {
+            aspectRatio = CGFloat(image.width) / CGFloat(image.height)
+        } else {
+            aspectRatio = 16 / 10
+        }
+
+        guard aspectRatio > 0 else {
+            return maximumPreviewSize
+        }
+
+        let size: CGSize
+        if aspectRatio >= maximumPreviewSize.width / maximumPreviewSize.height {
+            size = CGSize(width: maximumPreviewSize.width, height: maximumPreviewSize.width / aspectRatio)
+        } else {
+            size = CGSize(width: maximumPreviewSize.height * aspectRatio, height: maximumPreviewSize.height)
+        }
+
+        return CGSize(width: size.width.rounded(), height: size.height.rounded())
     }
 }
 
