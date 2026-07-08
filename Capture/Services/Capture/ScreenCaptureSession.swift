@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreMedia
+import CoreVideo
 import Foundation
 import ScreenCaptureKit
 
@@ -9,7 +10,10 @@ final class ScreenCaptureSession: NSObject {
     private var stream: SCStream?
     private var writer: MediaWriter?
     private var outputURL: URL?
+    private var expectedVideoDimensions: (width: Int, height: Int)?
+    private let lifecycleLock = NSLock()
     private var isStopping = false
+    private var hasReportedFailure = false
     private let writerBacklogLock = NSLock()
     private var pendingWriterSamples: [CapturedSampleKind: Int] = [:]
     private let writerBacklogLimits: [CapturedSampleKind: Int] = [
@@ -27,12 +31,13 @@ final class ScreenCaptureSession: NSObject {
         }
 
         self.outputURL = outputURL
-        isStopping = false
+        resetLifecycleForStart()
         resetWriterBacklog()
 
         let filter = makeFilter(for: target)
         let streamConfiguration = makeStreamConfiguration(for: target, filter: filter, recordingConfiguration: configuration)
         let videoSize = CGSize(width: streamConfiguration.width, height: streamConfiguration.height)
+        expectedVideoDimensions = (streamConfiguration.width, streamConfiguration.height)
 
         let mediaWriter = MediaWriter(
             outputURL: outputURL,
@@ -76,29 +81,35 @@ final class ScreenCaptureSession: NSObject {
     }
 
     func stop() async throws -> TimeInterval {
-        isStopping = true
-        if let stream {
-            try await stream.stopCapture()
-        }
-        stream = nil
+        beginStopping()
         defer {
             writer = nil
             outputURL = nil
-            isStopping = false
+            expectedVideoDimensions = nil
+            finishStopping()
             resetWriterBacklog()
         }
+
+        let activeStream = stream
+        stream = nil
+        if let activeStream {
+            try? await activeStream.stopCapture()
+        }
+
         return try await writer?.finish() ?? 0
     }
 
     func cancel() {
-        isStopping = true
+        beginStopping()
         Task {
-            try? await stream?.stopCapture()
-            await writer?.cancel()
+            let activeStream = stream
             stream = nil
+            try? await activeStream?.stopCapture()
+            await writer?.cancel()
             writer = nil
             outputURL = nil
-            isStopping = false
+            expectedVideoDimensions = nil
+            finishStopping()
             resetWriterBacklog()
         }
     }
@@ -124,14 +135,16 @@ final class ScreenCaptureSession: NSObject {
 
         configuration.width = outputSize.width
         configuration.height = outputSize.height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(recordingConfiguration.frameRate.rawValue))
-        configuration.queueDepth = 5
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(recordingConfiguration.effectiveFrameRate.rawValue))
+        configuration.queueDepth = 3
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.scalesToFit = true
         configuration.preservesAspectRatio = true
         configuration.showsCursor = recordingConfiguration.mouse.showsCursor
         configuration.showMouseClicks = recordingConfiguration.mouse.showsClicks
-        configuration.captureResolution = .best
+        configuration.captureResolution = .nominal
+        configuration.captureDynamicRange = .SDR
+        configuration.shouldBeOpaque = true
         configuration.capturesAudio = recordingConfiguration.audioMode.capturesSystemAudio
         configuration.captureMicrophone = recordingConfiguration.audioMode.capturesMicrophone
         configuration.microphoneCaptureDeviceID = recordingConfiguration.selectedMicrophoneID
@@ -159,7 +172,7 @@ final class ScreenCaptureSession: NSObject {
             size = CGSize(width: region.width * scale, height: region.height * scale)
         }
 
-        if let maximumLongEdge = recordingConfiguration.resolution.maximumLongEdge {
+        if let maximumLongEdge = recordingConfiguration.maximumReliableLongEdge {
             let longEdge = max(size.width, size.height)
             if longEdge > maximumLongEdge, longEdge > 0 {
                 let multiplier = maximumLongEdge / longEdge
@@ -199,21 +212,100 @@ final class ScreenCaptureSession: NSObject {
         writerBacklogLock.unlock()
     }
 
+    private func resetLifecycleForStart() {
+        lifecycleLock.lock()
+        isStopping = false
+        hasReportedFailure = false
+        lifecycleLock.unlock()
+    }
+
+    private func beginStopping() {
+        lifecycleLock.lock()
+        isStopping = true
+        lifecycleLock.unlock()
+    }
+
+    private func finishStopping() {
+        lifecycleLock.lock()
+        isStopping = false
+        lifecycleLock.unlock()
+    }
+
+    private func shouldIgnoreCallbacks() -> Bool {
+        lifecycleLock.lock()
+        let shouldIgnore = isStopping || hasReportedFailure
+        lifecycleLock.unlock()
+        return shouldIgnore
+    }
+
+    private func reportFailureOnce(_ failure: RecorderFailure) {
+        lifecycleLock.lock()
+        guard !isStopping, !hasReportedFailure else {
+            lifecycleLock.unlock()
+            return
+        }
+
+        hasReportedFailure = true
+        isStopping = true
+        lifecycleLock.unlock()
+        onFailure?(failure)
+    }
+
+    private func reportSourceUnavailableOnce() {
+        lifecycleLock.lock()
+        guard !isStopping, !hasReportedFailure else {
+            lifecycleLock.unlock()
+            return
+        }
+
+        hasReportedFailure = true
+        isStopping = true
+        lifecycleLock.unlock()
+        onSourceBecameUnavailable?()
+    }
+
     private static func evenDimension(_ value: CGFloat) -> Int {
         let rounded = max(2, Int(value.rounded(.toNearestOrAwayFromZero)))
         return rounded.isMultiple(of: 2) ? rounded : rounded + 1
+    }
+
+    private func isWritableScreenFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        guard CMSampleBufferDataIsReady(sampleBuffer),
+              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return false
+        }
+
+        if let expectedVideoDimensions {
+            let width = CVPixelBufferGetWidth(imageBuffer)
+            let height = CVPixelBufferGetHeight(imageBuffer)
+            guard width == expectedVideoDimensions.width, height == expectedVideoDimensions.height else {
+                return false
+            }
+        }
+
+        guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let attachments = attachmentsArray.first,
+              let statusRawValue = attachments[.status] as? Int,
+              let status = SCFrameStatus(rawValue: statusRawValue) else {
+            return true
+        }
+
+        return status == .complete
     }
 }
 
 extension ScreenCaptureSession: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard !isStopping else {
+        guard !shouldIgnoreCallbacks() else {
             return
         }
 
         let kind: CapturedSampleKind
         switch type {
         case .screen:
+            guard isWritableScreenFrame(sampleBuffer) else {
+                return
+            }
             kind = .screen
         case .audio:
             kind = .systemAudio
@@ -235,9 +327,9 @@ extension ScreenCaptureSession: SCStreamOutput {
             do {
                 try await writer?.append(sampleBuffer, kind: kind)
             } catch let failure as RecorderFailure {
-                onFailure?(failure)
+                reportFailureOnce(failure)
             } catch {
-                onFailure?(.writerFailed(error.localizedDescription))
+                reportFailureOnce(.writerFailed(error.localizedDescription))
             }
         }
     }
@@ -245,16 +337,16 @@ extension ScreenCaptureSession: SCStreamOutput {
 
 extension ScreenCaptureSession: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        guard !isStopping else {
+        guard !shouldIgnoreCallbacks() else {
             return
         }
-        onFailure?(.captureFailed(error.localizedDescription))
+        reportFailureOnce(.captureFailed(error.localizedDescription))
     }
 
     func streamDidBecomeInactive(_ stream: SCStream) {
-        guard !isStopping else {
+        guard !shouldIgnoreCallbacks() else {
             return
         }
-        onSourceBecameUnavailable?()
+        reportSourceUnavailableOnce()
     }
 }
